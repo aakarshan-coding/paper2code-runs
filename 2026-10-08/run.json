@@ -2,8 +2,8 @@
   "run_id": "2026-10-08",
   "started_at": "2026-10-08T14:42:11+00:00",
   "finished_at": null,
-  "stage": "build",
-  "outcome": null,
+  "stage": "inspect",
+  "outcome": "completed_suspicious",
   "paper": {
     "arxiv_id": "2610.09916",
     "title": "NeuralZip: Reusable Setup for Fast Lossless Compression",
@@ -15,8 +15,8 @@
   },
   "budget": {
     "limit_usd": 10.0,
-    "spent_usd": 1.48859465,
-    "spent_tokens": 424651,
+    "spent_usd": 1.6342846500000001,
+    "spent_tokens": 444549,
     "gpu_seconds": 12.941266499998164
   },
   "caps": {
