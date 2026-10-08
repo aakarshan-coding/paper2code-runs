@@ -2,7 +2,7 @@
   "run_id": "2026-10-08",
   "started_at": "2026-10-08T14:42:11+00:00",
   "finished_at": null,
-  "stage": "scope",
+  "stage": "build",
   "outcome": null,
   "paper": {
     "arxiv_id": "2610.09916",
@@ -16,8 +16,8 @@
   "budget": {
     "limit_usd": 10.0,
     "spent_usd": 1.48859465,
-    "spent_tokens": 361047,
-    "gpu_seconds": 0.0
+    "spent_tokens": 424651,
+    "gpu_seconds": 12.941266499998164
   },
   "caps": {
     "test_runs": 25,
@@ -25,10 +25,10 @@
     "stall_n": 5
   },
   "counters": {
-    "test_runs_used": 0,
-    "attempts": 0
+    "test_runs_used": 1,
+    "attempts": 1
   },
   "error": null,
   "scope_manifest_sha256": "62f6ae95a9efcce7a3ec331d80c0ae2a061f6eb166725829a53c2d9f62c19ac5",
-  "workspace_sha256": null
+  "workspace_sha256": "1984a12be001765ff63fbe6aafee9dd41287e9ee7afa557cb00f2cb19858afdf"
 }
