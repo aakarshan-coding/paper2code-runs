@@ -15,8 +15,8 @@
   },
   "budget": {
     "limit_usd": 10.0,
-    "spent_usd": 1.6342846500000001,
-    "spent_tokens": 444549,
+    "spent_usd": 2.04367965,
+    "spent_tokens": 508188,
     "gpu_seconds": 12.941266499998164
   },
   "caps": {

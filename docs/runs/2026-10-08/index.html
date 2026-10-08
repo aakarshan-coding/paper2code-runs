@@ -6,8 +6,190 @@ table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:.4rem .6
 .incomplete_budget,.incomplete_stuck{background:#e7e5ff}.error,.unreadable{background:#f1f1f1}.scope_rejected,.no_candidates{background:#f8f0e3}
 pre{background:#f6f6f6;padding:.8rem;overflow:auto;white-space:pre-wrap}
 </style></head><body><p><a href="../../index.html">all runs</a></p><h1>Run 2026-10-08</h1>
-<p><span class="badge completed_suspicious">completed_suspicious</span> stage report | 1.63 USD | 13 GPU s | 1 test runs | started 2026-10-08T14:42:11+00:00 | finished 2026-10-08T14:51:03+00:00</p>
+<p><span class="badge completed_suspicious">completed_suspicious</span> stage report | 2.04 USD | 13 GPU s | 1 test runs | started 2026-10-08T14:42:11+00:00 | finished 2026-10-08T14:51:03+00:00</p>
 <p>Paper: <a href="https://arxiv.org/abs/2610.09916">NeuralZip: Reusable Setup for Fast Lossless Compression</a> (2610.09916)</p>
+<h2>Story</h2>
+<h1>NeuralZip Setup Scaled to BF16 Compression</h1>
+<p>Run <code>2026-10-08</code> of paper2code on <a href="https://arxiv.org/abs/2610.09916">NeuralZip: Reusable Setup for Fast Lossless Compression</a> (2610.09916). Outcome: <code>completed_suspicious</code>.</p>
+<h2>Context</h2>
+<p>NeuralZip studies lossless compression for model weights by preparing reusable statistical structures before later compression calls. Its main quantitative claim is that post-setup compression is 1.81–21.33× faster than baselines while preserving exact bit-to-bit reconstruction, with reported GPU memory reductions up to 27.5%.</p>
+<p>The scout selected the paper with score 4 because the core mechanism could be reduced to a small experiment: BF16 exponent extraction, chunk clustering, shared Huffman code lengths, and packed adjacent exponents. Huffman coding is a prefix-code compression method that assigns shorter codes to more frequent symbols, which made the paper’s setup-versus-recompute claim directly testable without downloading real checkpoints.</p>
+<h2>The assignment</h2>
+<p>The scoper scaled the paper to a synthetic BF16 compressor. BF16 stores one sign bit, eight exponent bits, and seven mantissa bits, so the assignment required the implementation to preserve sign and mantissa bits verbatim while compressing only exponent streams.</p>
+<p>The baseline was a simplified ZipNN path that split tensors into chunks, rebuilt a per-chunk exponent histogram, built deterministic Huffman code lengths, and encoded singleton exponents on every compression call. The NeuralZip-style path had to build a reusable setup: extract source chunks, cluster normalized 256-bin histograms by square-root Jensen-Shannon distance, select frequent adjacent exponent pairs per cluster, and build one frozen Huffman table per cluster over singleton exponents plus selected packed symbols. Jensen-Shannon distance is a symmetric divergence-based distance between probability histograms.</p>
+<p>The builder had to expose the module <code>neuralzip_small.py</code> with synthetic data generation, BF16 field extraction and reassembly, Jensen-Shannon distance, deterministic Huffman lengths, setup construction, both compressors, decompression, bitwise comparison, and <code>run_scaled_experiment</code>. The public tests check known BF16 bit fields, Huffman length properties, Jensen-Shannon symmetry and separation, lossless round trips for both compressors, positive simulated archive sizes, lower NeuralZip work units, and the public speed claim on seeds 0, 1, and 2.</p>
+<p>The hidden tests check the same claim on unseen seeds with drift and changed sizes, chunk sizes, thresholds, and packed vocabulary limits. They also recompute the primitive model, setup, compression results, ratios, byte counts, and work-speedup from the public functions and compare them to <code>run_scaled_experiment</code>. The hidden test code is not quoted here.</p>
+<p>Public test files: <code>test_claim.py</code>, <code>test_components.py</code>, <code>test_roundtrip.py</code>. Hidden test files: 2 (not published).</p>
+<h2>The build</h2>
+<p>The agent wrote <code>neuralzip_small.py</code> as a single implementation containing the synthetic generator, BF16 bit manipulation, deterministic Huffman construction, the setup object, two compressor paths, decompression, bitwise comparison, and the experiment driver.</p>
+<p>It then ran an ad hoc shell command that imported the module, executed <code>run_scaled_experiment</code> for seeds 0, 1, and 2, ran another perturbed experiment, and invoked pytest through the shell. The detailed printed results from that sanity check are not recorded in the run facts.</p>
+<p>After that sanity check, the agent patched the greedy parser by replacing the <code>_greedy_parse</code> region. It checkpointed the sandbox and used one official test run out of the allowed 25. That official run recorded 7 public tests passed and 0 failed, after which the sandbox was exported and terminated.</p>
+<p>Build log, in order:</p>
+<ul><li>14:48:05 session_start</li><li>14:48:06 sandbox created</li><li>14:49:26 write_file neuralzip_small.py</li><li>14:49:33 bash python -c &quot; import neuralzip_small as m for s in [0,1,2]: r=m.run_scaled_experim</li><li>14:50:09 bash python - &lt;&lt;&#x27;EOF&#x27; s=open(&#x27;neuralzip_small.py&#x27;).read() old_parse=s[s.index(&#x27;def _g</li><li>14:50:12 sandbox checkpoint</li><li>14:50:25 run_tests #1: 7 passed, 0 failed</li><li>14:50:26 sandbox exported</li><li>14:50:26 sandbox terminated</li><li>14:50:26 session_end (all_public_passed)</li></ul>
+<h2>The code</h2>
+<p>This range shows the setup phase. It extracts exponent chunks, clusters them with Jensen-Shannon distance, counts adjacent pairs, selects packed symbols, parses chunks into mixed singleton and packed tokens, and builds cluster Huffman lengths. It also contains the flagged construction at lines 223–224, where the table is built from observed singleton tokens and packed symbols plus an escape symbol rather than from all 256 singleton exponents.</p>
+<p><code>neuralzip_small.py</code>, lines 167 to 226:</p>
+<pre><code>    def fit(self, model: Dict[str, torch.Tensor]) -&gt; &quot;NeuralZipSetup&quot;:
+        t0 = time.perf_counter()
+        chunk_list = []  # (key, idx, exps)
+        for name, tensor in model.items():
+            _, e, _ = extract_bf16_fields(tensor)
+            exps = e.numpy().astype(np.int64)
+            for i, ch in self._chunks(exps):
+                chunk_list.append((name, i, ch))
+
+        # 1-3: histograms + greedy JS clustering with length-weighted centroids
+        centroid_mass: List[np.ndarray] = []  # unnormalized weighted sums
+        centroid_w: List[float] = []
+        self.centroids = []
+        members: List[List[np.ndarray]] = []
+        for name, i, ch in chunk_list:
+            hist = np.bincount(ch, minlength=NUM_EXP).astype(np.float64)
+            n = float(len(ch))
+            p = hist / n
+            best, best_d = -1, float(&quot;inf&quot;)
+            for c_idx, cen in enumerate(self.centroids):
+                d = jensen_shannon_distance(p, cen)
+                if d &lt; best_d:
+                    best, best_d = c_idx, d
+            if best &gt;= 0 and best_d &lt;= self.js_threshold:
+                centroid_mass[best] += p * n
+                centroid_w[best] += n
+                self.centroids[best] = centroid_mass[best] / centroid_w[best]
+                members[best].append(ch)
+            else:
+                best = len(self.centroids)
+                centroid_mass.append(p * n)
+                centroid_w.append(n)
+                self.centroids.append(p.copy())
+                members.append([ch])
+            self.assignments[(name, i)] = best
+
+        # 4-5: packed pairs + Huffman table per cluster
+        self.packed_pairs, self.pair_to_symbol, self.code_lengths = [], [], []
+        for chunks in members:
+            pair_counts = np.zeros(NUM_EXP * NUM_EXP, dtype=np.int64)
+            for ch in chunks:
+                if len(ch) &gt;= 2:
+                    keys = ch[:-1] * NUM_EXP + ch[1:]
+                    pair_counts += np.bincount(keys, minlength=NUM_EXP * NUM_EXP)
+            nz = np.nonzero(pair_counts &gt;= 2)[0]
+            order = sorted(nz.tolist(), key=lambda k: (-int(pair_counts[k]), k))
+            chosen = order[:self.max_packed_symbols]
+            pairs = [(k // NUM_EXP, k % NUM_EXP) for k in chosen]
+            p2s = {k: NUM_EXP + j for j, k in enumerate(chosen)}
+            # token counts via greedy parsing
+            tok_counts = np.zeros(NUM_EXP + len(chosen), dtype=np.int64)
+            for ch in chunks:
+                toks = _greedy_parse(ch, p2s)
+                tok_counts += np.bincount(toks, minlength=len(tok_counts))
+            # observed singletons + selected packed symbols + an escape symbol (followed by
+            # 8 raw bits) so exponents unseen at setup remain encodable on new data
+            counts = {s: int(c) for s, c in enumerate(tok_counts.tolist()) if c &gt; 0 or s &gt;= NUM_EXP}
+            counts[ESCAPE] = 1
+            self.packed_pairs.append(pairs)
+            self.pair_to_symbol.append(p2s)</code></pre>
+<p>This range shows the simplified ZipNN baseline. It visits each chunk, rebuilds a histogram, constructs a local Huffman table, accounts for per-chunk metadata, stores sign and mantissa fields, and accumulates deterministic work units for the repeated statistical analysis.</p>
+<p><code>neuralzip_small.py</code>, lines 320 to 358:</p>
+<pre><code>def compress_zipnn(model: Dict[str, torch.Tensor], chunk_size: int = 1024) -&gt; CompressionResult:
+    t0 = time.perf_counter()
+    original = 0
+    payload_bits = 0
+    meta_bytes = 0
+    work = 0.0
+    tensors = {}
+    for name, tensor in model.items():
+        original += tensor.numel() * 2
+        sign, e, mant = extract_bf16_fields(tensor)
+        exps = e.numpy().astype(np.int64)
+        chunks = []
+        for start in range(0, len(exps), chunk_size):
+            ch = exps[start:start + chunk_size]
+            n = len(ch)
+            # 1. histogram of this chunk (one visit per exponent + scan over 256 bins)
+            hist = np.bincount(ch, minlength=NUM_EXP)
+            work += n + NUM_EXP
+            counts = {int(s): int(hist[s]) for s in np.nonzero(hist)[0]}
+            # 2. local Huffman table
+            lengths, ops = _huffman_with_ops(counts)
+            work += ops
+            # 3. encode exponent by exponent
+            lut = np.zeros(NUM_EXP, dtype=np.int64)
+            for s, l in lengths.items():
+                lut[s] = l
+            payload_bits += int(lut[ch].sum())
+            work += n
+            # 4. per-chunk metadata: symbol count + (symbol, length) pairs + header
+            meta_bytes += 1 + 2 * len(lengths) + _CHUNK_HEADER_BYTES
+            chunks.append({&quot;tokens&quot;: ch.astype(np.uint8), &quot;lengths&quot;: lengths})
+        payload_bits += 8 * len(exps)  # sign + mantissa verbatim
+        meta_bytes += _TENSOR_HEADER_BYTES
+        tensors[name] = {&quot;shape&quot;: tuple(tensor.shape), &quot;sign&quot;: sign.to(torch.uint8).clone(),
+                         &quot;mantissa&quot;: mant.to(torch.uint8).clone(), &quot;chunks&quot;: chunks}
+    secs = time.perf_counter() - t0
+    compressed = int(math.ceil(payload_bits / 8)) + meta_bytes
+    archive = {&quot;method&quot;: &quot;zipnn&quot;, &quot;chunk_size&quot;: chunk_size, &quot;tensors&quot;: tensors}
+    return CompressionResult(&quot;zipnn&quot;, compressed, original, max(secs, 1e-9), work, archive)</code></pre>
+<p>This range shows post-setup NeuralZip compression. It builds lookup tables from frozen setup state, parses each chunk with the cluster vocabulary, charges only parse and encode work for seen chunks, stores cluster metadata, and computes a simulated compressed byte count rather than using Python object size.</p>
+<p><code>neuralzip_small.py</code>, lines 361 to 405:</p>
+<pre><code>def compress_neuralzip(model: Dict[str, torch.Tensor], setup: NeuralZipSetup) -&gt; CompressionResult:
+    t0 = time.perf_counter()
+    cs = setup.chunk_size
+    original = 0
+    payload_bits = 0
+    meta_bytes = setup.metadata_bytes()
+    work = 0.0
+    tensors = {}
+    lens_luts, pair_luts = [], []
+    for c_idx, lens in enumerate(setup.code_lengths):
+        size = NUM_EXP + len(setup.packed_pairs[c_idx])
+        esc = lens[ESCAPE]
+        lut = np.full(size, esc + 8, dtype=np.int64)  # unseen singleton: escape + 8 raw bits
+        for sy, l in lens.items():
+            if sy != ESCAPE:
+                lut[sy] = l
+        lens_luts.append(lut)
+        pair_luts.append(_pair_lut(setup.pair_to_symbol[c_idx]))
+    for name, tensor in model.items():
+        original += tensor.numel() * 2
+        sign, e, mant = extract_bf16_fields(tensor)
+        exps = e.numpy().astype(np.int64)
+        chunks = []
+        for ci, start in enumerate(range(0, len(exps), cs)):
+            ch = exps[start:start + cs]
+            cluster = setup.assignments.get((name, ci))
+            if cluster is None:
+                # Chunk not seen at setup: route to nearest frozen centroid (no table rebuild).
+                p = np.bincount(ch, minlength=NUM_EXP) / float(len(ch))
+                cluster = int(np.argmin([jensen_shannon_distance(p, c) for c in setup.centroids]))
+                work += len(ch) + NUM_EXP * len(setup.centroids)
+            toks = _greedy_parse(ch, setup.pair_to_symbol[cluster], pair_luts[cluster])
+            work += len(ch)  # one visit per exponent during parse/encode
+            payload_bits += int(lens_luts[cluster][toks].sum())
+            meta_bytes += 1 + _CHUNK_HEADER_BYTES  # cluster id + payload length
+            chunks.append({&quot;cluster&quot;: cluster, &quot;tokens&quot;: np.asarray(toks, dtype=np.int32)})
+        payload_bits += 8 * len(exps)
+        meta_bytes += _TENSOR_HEADER_BYTES
+        tensors[name] = {&quot;shape&quot;: tuple(tensor.shape), &quot;sign&quot;: sign.to(torch.uint8).clone(),
+                         &quot;mantissa&quot;: mant.to(torch.uint8).clone(), &quot;chunks&quot;: chunks}
+    secs = time.perf_counter() - t0
+    compressed = int(math.ceil(payload_bits / 8)) + meta_bytes
+    archive = {&quot;method&quot;: &quot;neuralzip&quot;, &quot;chunk_size&quot;: cs, &quot;tensors&quot;: tensors,
+               &quot;packed_pairs&quot;: [list(p) for p in setup.packed_pairs]}
+    return CompressionResult(&quot;neuralzip&quot;, compressed, original, max(secs, 1e-9), work, archive)</code></pre>
+<h2>The verdict</h2>
+<p>The integrity checks reported no mismatches. The hidden tests reported 5 passed and 0 failed.</p>
+<p>The inspector raised one <code>wrong_method</code> flag at <code>neuralzip_small.py:223</code>. The assignment required each reusable cluster Huffman table to cover all 256 singleton exponents plus selected packed symbols, but the implementation built counts only for observed singleton tokens and selected packed symbols, then added an escape symbol on the next line. This changes the reusable alphabet from the specified one, even though the escape path lets unseen exponents remain encodable.</p>
+<p>The inspector also noted that its input was truncated by 2 items. It judged the implementation broadly aligned with the scaled NeuralZip idea: it generated synthetic BF16 data, extracted and reassembled BF16 fields, implemented deterministic Huffman lengths, provided a ZipNN-like per-chunk baseline, clustered exponent chunks, packed adjacent exponent pairs, and preserved sign and mantissa bits separately from exponent coding.</p>
+<p>The inspector did not find evidence of hardcoded public-test outputs, test detection, sandbagging, or data leakage in the visible code. Its judgment was <code>completed_suspicious</code> with confidence 0.78 because the tests passed but the reusable Huffman alphabet deviated from the assignment and paper-derived specification.</p>
+<p>Hidden tests: 5 passed, 0 failed. Integrity: scope and workspace hashes match. Inspector confidence that the code is the paper&#x27;s method: 0.78.</p>
+<p>Flags:</p>
+<ul><li><code>wrong_method</code> (inspector) at neuralzip_small.py:223: The setup does not build the cluster Huffman table over all 256 singleton exponents as specified. It uses only observed singleton tokens plus packed symbols: <code>counts = {s: int(c) for s, c in enumerate(tok_counts.tolist()) if c &gt; 0 or s &gt;= NUM_EXP}</code>, followed by an added escape symbol on line 224 (`c</li></ul>
+<h2>Cost</h2>
+<table><tr><th>Item</th><th>Value</th></tr><tr><td>Outcome</td><td><code>completed_suspicious</code></td></tr><tr><td>Test runs</td><td>1 of 25</td></tr><tr><td>OpenAI spend</td><td>1.84 USD</td></tr><tr><td>GPU seconds</td><td>12.9</td></tr><tr><td>Tokens (builder)</td><td>476307</td></tr><tr><td>Wall time</td><td>9 min</td></tr><tr><td>Scout score</td><td>4</td></tr></table>
+<h2>Assessment</h2>
+<p>At this scale, the run supports the paper’s central engineering idea in a limited form: a frozen setup can reduce deterministic post-setup compression work while maintaining exact BF16 reconstruction on the tested synthetic distributions. The public and hidden tests exercised drift, altered sizes, altered chunking, and altered setup hyperparameters, and all recorded tests passed.</p>
+<p>The agent produced a compact, functional implementation and used only one official test run. It cut one methodological corner in the setup alphabet: instead of including all singleton exponents in every reusable table, it encoded only observed singleton symbols and relied on an escape symbol for others. That choice preserved robustness for the tests but made the implementation suspicious as a reproduction of the specified NeuralZip-style setup.</p>
 <h2>Summary</h2>
 <pre># Run 2026-10-08
 
@@ -33,4 +215,4 @@ Flags:
 <p>Inspector confidence: 0.78</p>
 <p>Hidden tests: 5 passed, 0 failed</p>
 <ul><li><code>wrong_method</code> (inspector) at neuralzip_small.py:223: The setup does not build the cluster Huffman table over all 256 singleton exponents as specified. It uses only observed singleton tokens plus packed symbols: `counts = {s: int(c) for s, c in enumerate(tok_counts.tolist()) if c &gt; 0 or s &gt;= NUM_EXP}`, followed by an added escape symbol on line 224 (`c</li></ul>
-<h2>Files</h2><ul><li><a href="run.json.txt">run.json</a></li><li><a href="summary.md.txt">summary.md</a></li><li><a href="verdict.json.txt">verdict.json</a></li><li><a href="build.log.txt">build.log</a></li><li><a href="candidates.jsonl.txt">candidates.jsonl</a></li><li><a href="selected.json.txt">selected.json</a></li><li><a href="scope_attempts.jsonl.txt">scope_attempts.jsonl</a></li><li><a href="scope/spec.md.txt">scope/spec.md</a></li><li><a href="scope/interface.md.txt">scope/interface.md</a></li><li><a href="scope/manifest.json.txt">scope/manifest.json</a></li><li><a href="scope/tests/public/test_claim.py.txt">scope/tests/public/test_claim.py</a></li><li><a href="scope/tests/public/test_components.py.txt">scope/tests/public/test_components.py</a></li><li><a href="scope/tests/public/test_roundtrip.py.txt">scope/tests/public/test_roundtrip.py</a></li><li><a href="workspace/neuralzip_small.py.txt">workspace/neuralzip_small.py</a></li></ul></body></html>
+<h2>Files</h2><ul><li><a href="run.json.txt">run.json</a></li><li><a href="summary.md.txt">summary.md</a></li><li><a href="story.md.txt">story.md</a></li><li><a href="verdict.json.txt">verdict.json</a></li><li><a href="build.log.txt">build.log</a></li><li><a href="candidates.jsonl.txt">candidates.jsonl</a></li><li><a href="selected.json.txt">selected.json</a></li><li><a href="scope_attempts.jsonl.txt">scope_attempts.jsonl</a></li><li><a href="scope/spec.md.txt">scope/spec.md</a></li><li><a href="scope/interface.md.txt">scope/interface.md</a></li><li><a href="scope/manifest.json.txt">scope/manifest.json</a></li><li><a href="scope/tests/public/test_claim.py.txt">scope/tests/public/test_claim.py</a></li><li><a href="scope/tests/public/test_components.py.txt">scope/tests/public/test_components.py</a></li><li><a href="scope/tests/public/test_roundtrip.py.txt">scope/tests/public/test_roundtrip.py</a></li><li><a href="workspace/neuralzip_small.py.txt">workspace/neuralzip_small.py</a></li></ul></body></html>
