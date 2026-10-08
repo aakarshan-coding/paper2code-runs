@@ -1,0 +1,9 @@
+{
+  "interface.md": "6a7c319ef4cd316a6ee2d32acbdf505141a8ae3678c1970f57a6ce8716c32bc9",
+  "spec.md": "d387a2c009a450fb32d7df1e320828b18c854a0b0000309bd9b3b744b47e76c7",
+  "tests/hidden/test_hidden_claim_variants.py": "d5e4c8b61e207a06cb6cb9aa16e8148b5f8eb625bba26b1800e95af9da7afbd6",
+  "tests/hidden/test_hidden_recompute.py": "4a011ff67e2ca67157e89a765addb2a04e52827d2d2952e4362dca4ab59b796c",
+  "tests/public/test_claim.py": "37bd83fd29ced990899c1ff274995956fa935078972177920328ccf4b84ab52e",
+  "tests/public/test_components.py": "586147ae1682f851cda68c336a4e18f40e5bc7258bca5b878c84d177045be887",
+  "tests/public/test_roundtrip.py": "2fb1aba5499e4b25ea55e2a111bebe38024797a4a913e2c32f4f8f3740a7dfb5"
+}

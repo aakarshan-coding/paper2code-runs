@@ -1,0 +1,119 @@
+{
+  "spec_md": "# Scaled assignment: reusable NeuralZip-style setup for BF16 weights\n\n## Method to implement\nImplement a small, lossless BF16 model-weight compressor that isolates the paper's two core ideas: reusable shared exponent codebooks and packed adjacent exponents.\n\nBF16 values have 16 stored bits: 1 sign bit, 8 exponent bits, and 7 mantissa bits. The compressor must preserve sign and mantissa bits verbatim and compress only the exponent stream. Decompression must reconstruct the exact original BF16 bit patterns.\n\n### Baseline: simplified ZipNN\nThe baseline splits every tensor's exponent stream into fixed-size chunks. For each chunk, during every compression call, it:\n1. Builds a histogram of the chunk's single exponent values.\n2. Builds Huffman code lengths for that chunk.\n3. Encodes exponents one by one using that local table.\n4. Stores sign/mantissa bits verbatim and accounts for per-chunk Huffman metadata.\n\nThis baseline intentionally repeats statistical analysis and code construction for every compression call.\n\n### NeuralZip-style method\nThe NeuralZip-style method has a setup phase and a post-setup compression phase.\n\nSetup phase, excluded from the post-setup compression metric:\n1. Extract BF16 exponent chunks from a source model.\n2. Compute each chunk's normalized 256-bin exponent histogram.\n3. Greedily cluster chunks by square-root Jensen-Shannon distance. A chunk joins the nearest existing centroid if the distance is at most `js_threshold`; otherwise it starts a new cluster. Centroids are weighted by chunk lengths.\n4. For each cluster, count adjacent exponent pairs inside chunk boundaries and select up to `max_packed_symbols` frequent pairs as packed symbols.\n5. Build one reusable Huffman code-length table per cluster over all singleton exponents plus selected packed symbols. Use greedy parsing for token counts: if the next two exponents form a selected pair, emit the packed symbol and advance by two; otherwise emit one singleton and advance by one.\n\nPost-setup compression phase, used for the speed claim:\n1. Reuse the frozen chunk-to-cluster assignments, packed vocabularies, and Huffman code lengths.\n2. Parse each chunk with the frozen packed vocabulary and compute/store the token stream.\n3. Do not rebuild histograms or Huffman tables during NeuralZip compression.\n4. Store sign/mantissa bits verbatim and enough metadata to decompress exactly.\n\nThe implementation may store token streams in Python objects for decompression, but `compressed_bytes` must be a simulated archive size computed from Huffman payload bits plus specified metadata, not from Python object size.\n\n### Huffman code lengths\nImplement deterministic Huffman code lengths from positive integer counts. If there is only one symbol, assign length 1. Otherwise repeatedly merge two lowest-weight nodes; ties must be deterministic, e.g. by a monotonically increasing counter. Return only lengths, not necessarily bitstrings.\n\n### Synthetic BF16 data\nNo downloads are required. Generate synthetic BF16 weights with `numpy.random.default_rng(seed)`. For each tensor and chunk, choose a latent exponent family from `num_families`. Family centers are around BF16 exponents `120 + 2*f`. Generate exponents mostly as repeated local pairs such as `(center, center)`, `(center, center+1)`, and `(center-1, center)`, with occasional nearby random exponents. With probability `drift`, replace an exponent by a random exponent in `[112, 136]`. Generate sign bits uniformly and mantissas uniformly in `[0, 127]`. Combine bits as `(sign << 15) | (exponent << 7) | mantissa`, view as `torch.bfloat16`, and return a dict of tensors.\n\nThis synthetic data is deliberately small but has the two properties the paper exploits: chunks form a few similar exponent-distribution groups, and adjacent exponent pairs recur often.\n\n## Scaled experiment plan\nFor one seed, `run_scaled_experiment` must:\n1. Generate a synthetic BF16 model with defaults `num_tensors=8`, `tensor_size=32768`, `num_families=4`, `drift=0.0`.\n2. Build a NeuralZip setup with `chunk_size=1024`, `js_threshold=0.05`, and `max_packed_symbols=64`.\n3. Compress the model once with simplified ZipNN and once with NeuralZip.\n4. Verify exact bitwise decompression for both compressors.\n5. Return metrics including compression ratios, deterministic post-setup work units, work-speedup, and measured wall-clock seconds.\n\nBecause wall-clock timing can be noisy in grading, the claim test compares the deterministic work proxy `post_setup_work_speedup = zipnn_work_units / neuralzip_work_units`. The work units must count the repeated baseline statistical work and Huffman construction but not NeuralZip setup. A reasonable implementation is: exponent visits for both methods, plus substantial per-chunk histogram/codebook-construction work for ZipNN, and no Huffman-construction work for NeuralZip post-setup.\n\nPublic claim seeds: `0, 1, 2`. Hidden variants use additional seeds and perturb data size, drift, chunk size, JS threshold, and packed vocabulary size.\n\n## Claim\nAt this reduced scale, after its setup is available, NeuralZip must beat the simplified ZipNN baseline by at least `2.0x` on deterministic post-setup compression work while preserving exact BF16 reconstruction. As a sanity check, NeuralZip's simulated compression ratio should not be more than 5 percentage points worse than ZipNN on the public claim settings.",
+  "interface": {
+    "module": "neuralzip_small",
+    "functions": [
+      {
+        "signature": "def generate_synthetic_bf16_model(seed: int, num_tensors: int = 8, tensor_size: int = 32768, num_families: int = 4, drift: float = 0.0) -> dict[str, torch.Tensor]:",
+        "doc": "Generate a deterministic dict of synthetic BF16 weight tensors with clustered, pair-redundant exponents."
+      },
+      {
+        "signature": "def extract_bf16_fields(tensor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:",
+        "doc": "Return sign, exponent, and mantissa integer tensors extracted from a BF16 tensor's stored bits."
+      },
+      {
+        "signature": "def reassemble_bf16(sign: torch.Tensor, exponent: torch.Tensor, mantissa: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:",
+        "doc": "Reconstruct a BF16 tensor with exactly the supplied sign, exponent, and mantissa bits."
+      },
+      {
+        "signature": "def jensen_shannon_distance(p: np.ndarray, q: np.ndarray) -> float:",
+        "doc": "Compute the square-root Jensen-Shannon distance between two normalized histograms."
+      },
+      {
+        "signature": "def huffman_code_lengths(counts: dict[int, int]) -> dict[int, int]:",
+        "doc": "Compute deterministic Huffman code lengths for symbols with positive integer counts."
+      },
+      {
+        "signature": "def build_neuralzip_setup(model: dict[str, torch.Tensor], chunk_size: int = 1024, js_threshold: float = 0.05, max_packed_symbols: int = 64) -> NeuralZipSetup:",
+        "doc": "Build reusable clustered Huffman tables and packed-exponent vocabularies for a BF16 model."
+      },
+      {
+        "signature": "def compress_zipnn(model: dict[str, torch.Tensor], chunk_size: int = 1024) -> CompressionResult:",
+        "doc": "Compress a BF16 model with the simplified ZipNN baseline that rebuilds Huffman tables per chunk."
+      },
+      {
+        "signature": "def compress_neuralzip(model: dict[str, torch.Tensor], setup: NeuralZipSetup) -> CompressionResult:",
+        "doc": "Compress a BF16 model using a frozen NeuralZip setup without rebuilding codebooks."
+      },
+      {
+        "signature": "def decompress(result: CompressionResult) -> dict[str, torch.Tensor]:",
+        "doc": "Decompress either compressor's archive and return exactly reconstructed BF16 tensors."
+      },
+      {
+        "signature": "def bitwise_equal_model(a: dict[str, torch.Tensor], b: dict[str, torch.Tensor]) -> bool:",
+        "doc": "Return True iff two BF16 model dicts have identical keys, shapes, dtypes, and stored bits."
+      },
+      {
+        "signature": "def run_scaled_experiment(seed: int, num_tensors: int = 8, tensor_size: int = 32768, num_families: int = 4, drift: float = 0.0, chunk_size: int = 1024, js_threshold: float = 0.05, max_packed_symbols: int = 64, timing_repeats: int = 3) -> dict[str, float]:",
+        "doc": "Run the scaled one-seed experiment and return the metrics used by the claim tests."
+      }
+    ],
+    "classes": [
+      {
+        "name": "NeuralZipSetup",
+        "doc": "Frozen reusable setup containing chunk size, cluster assignments, packed vocabularies, and Huffman code lengths.",
+        "methods": [
+          {
+            "signature": "def __init__(self, chunk_size: int = 1024, js_threshold: float = 0.05, max_packed_symbols: int = 64) -> None:",
+            "doc": "Create an empty setup configuration."
+          },
+          {
+            "signature": "def fit(self, model: dict[str, torch.Tensor]) -> NeuralZipSetup:",
+            "doc": "Fit the setup to a BF16 model and return self."
+          }
+        ]
+      },
+      {
+        "name": "CompressionResult",
+        "doc": "Container for a compressed archive, simulated size, exact-decompression metadata, timing, and deterministic work units.",
+        "methods": [
+          {
+            "signature": "def __init__(self, method: str, compressed_bytes: int, original_bytes: int, compression_seconds: float, work_units: float, archive: dict[str, object]) -> None:",
+            "doc": "Create a compression result object."
+          },
+          {
+            "signature": "def ratio(self) -> float:",
+            "doc": "Return compressed_bytes divided by original_bytes."
+          }
+        ]
+      }
+    ]
+  },
+  "public_tests": [
+    {
+      "path": "test_components.py",
+      "content": "import math\nimport numpy as np\nimport torch\n\nfrom neuralzip_small import (\n    extract_bf16_fields,\n    huffman_code_lengths,\n    jensen_shannon_distance,\n    reassemble_bf16,\n)\n\n\ndef _bf16_from_u16(bits):\n    signed = [b if b < 32768 else b - 65536 for b in bits]\n    return torch.tensor(signed, dtype=torch.int16).view(torch.bfloat16)\n\n\ndef _u16_from_bf16(x):\n    return (x.view(torch.int16).to(torch.int32) & 0xFFFF).tolist()\n\n\ndef test_bf16_field_roundtrip_known_values():\n    bits = [0x3F80, 0xBF80, 0x4000, 0x0001, 0x7F80]\n    x = _bf16_from_u16(bits)\n    sign, exponent, mantissa = extract_bf16_fields(x)\n    assert sign.tolist() == [0, 1, 0, 0, 0]\n    assert exponent.tolist() == [127, 127, 128, 0, 255]\n    assert mantissa.tolist() == [0, 0, 0, 1, 0]\n    y = reassemble_bf16(sign, exponent, mantissa, tuple(x.shape))\n    assert _u16_from_bf16(y) == bits\n\n\ndef test_huffman_lengths_are_prefix_cost_reasonable():\n    counts = {0: 8, 1: 4, 2: 2, 3: 1}\n    lengths = huffman_code_lengths(counts)\n    assert set(lengths) == set(counts)\n    assert lengths[0] <= lengths[1] <= lengths[2]\n    assert max(lengths.values()) <= 4\n    huff_cost = sum(counts[s] * lengths[s] for s in counts)\n    fixed_two_bit_cost = 2 * sum(counts.values())\n    assert huff_cost < fixed_two_bit_cost\n\n\ndef test_jensen_shannon_distance_properties():\n    p = np.array([0.5, 0.5, 0.0], dtype=float)\n    q = np.array([0.5, 0.5, 0.0], dtype=float)\n    r = np.array([0.0, 0.25, 0.75], dtype=float)\n    assert jensen_shannon_distance(p, q) == 0.0\n    d1 = jensen_shannon_distance(p, r)\n    d2 = jensen_shannon_distance(r, p)\n    assert d1 > 0.1\n    assert math.isclose(d1, d2, rel_tol=1e-12, abs_tol=1e-12)\n"
+    },
+    {
+      "path": "test_roundtrip.py",
+      "content": "from neuralzip_small import (\n    bitwise_equal_model,\n    build_neuralzip_setup,\n    compress_neuralzip,\n    compress_zipnn,\n    decompress,\n    generate_synthetic_bf16_model,\n)\n\n\ndef test_both_compressors_are_lossless_and_nontrivial():\n    model = generate_synthetic_bf16_model(seed=123, num_tensors=4, tensor_size=4096, num_families=3)\n    setup = build_neuralzip_setup(model, chunk_size=512, js_threshold=0.06, max_packed_symbols=32)\n    neural = compress_neuralzip(model, setup)\n    zipnn = compress_zipnn(model, chunk_size=512)\n\n    assert bitwise_equal_model(model, decompress(neural))\n    assert bitwise_equal_model(model, decompress(zipnn))\n    assert neural.original_bytes == sum(t.numel() * 2 for t in model.values())\n    assert zipnn.original_bytes == neural.original_bytes\n    assert 0 < neural.compressed_bytes < neural.original_bytes\n    assert 0 < zipnn.compressed_bytes < zipnn.original_bytes\n    assert neural.work_units < zipnn.work_units\n    assert neural.ratio() <= zipnn.ratio() + 0.08\n"
+    },
+    {
+      "path": "test_claim.py",
+      "content": "import pytest\n\nfrom neuralzip_small import run_scaled_experiment\n\n\n@pytest.mark.parametrize(\"seed\", [0, 1, 2])\ndef test_neuralzip_beats_zipnn_post_setup_work(seed):\n    metrics = run_scaled_experiment(seed, timing_repeats=2)\n    assert metrics[\"zipnn_lossless\"] == 1.0\n    assert metrics[\"neuralzip_lossless\"] == 1.0\n    assert metrics[\"post_setup_work_speedup\"] >= 2.0\n    assert metrics[\"neuralzip_ratio\"] <= metrics[\"zipnn_ratio\"] + 0.05\n    assert metrics[\"zipnn_compressed_bytes\"] > 0\n    assert metrics[\"neuralzip_compressed_bytes\"] > 0\n    assert metrics[\"zipnn_compression_seconds\"] > 0.0\n    assert metrics[\"neuralzip_compression_seconds\"] > 0.0\n"
+    }
+  ],
+  "hidden_tests": [
+    {
+      "path": "test_hidden_claim_variants.py",
+      "content": "import pytest\n\nfrom neuralzip_small import run_scaled_experiment\n\n\n@pytest.mark.parametrize(\"seed\", [11, 17, 23])\ndef test_claim_on_unseen_seeds_with_drift(seed):\n    metrics = run_scaled_experiment(\n        seed,\n        num_tensors=7,\n        tensor_size=24576,\n        num_families=5,\n        drift=0.015,\n        chunk_size=768,\n        js_threshold=0.05,\n        max_packed_symbols=48,\n        timing_repeats=1,\n    )\n    assert metrics[\"zipnn_lossless\"] == 1.0\n    assert metrics[\"neuralzip_lossless\"] == 1.0\n    assert metrics[\"post_setup_work_speedup\"] >= 2.0\n    assert metrics[\"neuralzip_ratio\"] <= metrics[\"zipnn_ratio\"] + 0.07\n\n\ndef test_claim_on_different_slice_and_perturbed_hyperparameters():\n    metrics = run_scaled_experiment(\n        31,\n        num_tensors=5,\n        tensor_size=40960,\n        num_families=4,\n        drift=0.03,\n        chunk_size=1024,\n        js_threshold=0.075,\n        max_packed_symbols=32,\n        timing_repeats=1,\n    )\n    assert metrics[\"zipnn_lossless\"] == 1.0\n    assert metrics[\"neuralzip_lossless\"] == 1.0\n    assert metrics[\"post_setup_work_speedup\"] >= 2.0\n    assert metrics[\"neuralzip_ratio\"] <= metrics[\"zipnn_ratio\"] + 0.08\n"
+    },
+    {
+      "path": "test_hidden_recompute.py",
+      "content": "import math\n\nfrom neuralzip_small import (\n    bitwise_equal_model,\n    build_neuralzip_setup,\n    compress_neuralzip,\n    compress_zipnn,\n    decompress,\n    generate_synthetic_bf16_model,\n    run_scaled_experiment,\n)\n\n\ndef test_experiment_metrics_match_primitive_recomputation():\n    params = dict(\n        seed=37,\n        num_tensors=6,\n        tensor_size=28672,\n        num_families=4,\n        drift=0.02,\n        chunk_size=896,\n        js_threshold=0.04,\n        max_packed_symbols=40,\n        timing_repeats=1,\n    )\n    reported = run_scaled_experiment(**params)\n\n    model = generate_synthetic_bf16_model(\n        params[\"seed\"],\n        num_tensors=params[\"num_tensors\"],\n        tensor_size=params[\"tensor_size\"],\n        num_families=params[\"num_families\"],\n        drift=params[\"drift\"],\n    )\n    setup = build_neuralzip_setup(\n        model,\n        chunk_size=params[\"chunk_size\"],\n        js_threshold=params[\"js_threshold\"],\n        max_packed_symbols=params[\"max_packed_symbols\"],\n    )\n    zipnn = compress_zipnn(model, chunk_size=params[\"chunk_size\"])\n    neural = compress_neuralzip(model, setup)\n\n    assert bitwise_equal_model(model, decompress(zipnn))\n    assert bitwise_equal_model(model, decompress(neural))\n\n    recomputed_zip_ratio = zipnn.compressed_bytes / zipnn.original_bytes\n    recomputed_neural_ratio = neural.compressed_bytes / neural.original_bytes\n    recomputed_speedup = zipnn.work_units / neural.work_units\n\n    assert reported[\"zipnn_compressed_bytes\"] == zipnn.compressed_bytes\n    assert reported[\"neuralzip_compressed_bytes\"] == neural.compressed_bytes\n    assert math.isclose(reported[\"zipnn_ratio\"], recomputed_zip_ratio, rel_tol=1e-12, abs_tol=1e-12)\n    assert math.isclose(reported[\"neuralzip_ratio\"], recomputed_neural_ratio, rel_tol=1e-12, abs_tol=1e-12)\n    assert math.isclose(reported[\"post_setup_work_speedup\"], recomputed_speedup, rel_tol=1e-12, abs_tol=1e-12)\n    assert recomputed_speedup >= 2.0\n"
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    11,
+    17,
+    23,
+    31,
+    37
+  ],
+  "est_gpu_hours": 0.05,
+  "est_usd": 0.05,
+  "notes": "The most common mistake is to include NeuralZip setup work in the post-setup compression metric; setup must be built once and excluded from `post_setup_work_speedup`. Another likely pitfall is converting BF16 tensors through float values instead of preserving raw 16-bit patterns; tests compare stored bits, so decompression must be bit-exact."
+}

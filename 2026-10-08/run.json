@@ -2,7 +2,7 @@
   "run_id": "2026-10-08",
   "started_at": "2026-10-08T14:42:11+00:00",
   "finished_at": null,
-  "stage": "select",
+  "stage": "scope",
   "outcome": null,
   "paper": {
     "arxiv_id": "2610.09916",
@@ -15,8 +15,8 @@
   },
   "budget": {
     "limit_usd": 10.0,
-    "spent_usd": 1.13225465,
-    "spent_tokens": 333319,
+    "spent_usd": 1.48859465,
+    "spent_tokens": 361047,
     "gpu_seconds": 0.0
   },
   "caps": {
@@ -29,6 +29,6 @@
     "attempts": 0
   },
   "error": null,
-  "scope_manifest_sha256": null,
+  "scope_manifest_sha256": "62f6ae95a9efcce7a3ec331d80c0ae2a061f6eb166725829a53c2d9f62c19ac5",
   "workspace_sha256": null
 }
