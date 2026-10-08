@@ -1,8 +1,8 @@
 {
   "run_id": "2026-10-08",
   "started_at": "2026-10-08T14:42:11+00:00",
-  "finished_at": null,
-  "stage": "inspect",
+  "finished_at": "2026-10-08T14:51:03+00:00",
+  "stage": "report",
   "outcome": "completed_suspicious",
   "paper": {
     "arxiv_id": "2610.09916",
