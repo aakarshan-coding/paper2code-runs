@@ -1,0 +1,56 @@
+{
+  "policy": {
+    "name": "select_v1_testability",
+    "version": "1"
+  },
+  "shortlist": [
+    {
+      "pass": 2,
+      "arxiv_id": "2610.09916",
+      "title": "NeuralZip: Reusable Setup for Fast Lossless Compression",
+      "testability": 4,
+      "difficulty": "medium",
+      "est_gpu_hours": 0.1,
+      "est_usd": 0.1,
+      "claim": "At reduced scale, NeuralZip should beat ZipNN on lossless BF16 model-weight compression by at least 2x faster post-setup compression.",
+      "dataset": "GPT-2 small pretrained weights from HuggingFace Transformers, freely downloadable: yes",
+      "reason": "The main compression-speed claim is fairly concrete and can be tested without training: download a small public checkpoint, cast/store weights as BF16, compare a reusable-codebook NeuralZip compressor against a per-chunk Huffman/ZipNN-style baseline, and verify exact bitwise decompression. The method is moderately involved because it needs bit-level BF16 field handling, Huffman coding, JS clustering, packed exponent symbols, and fair timing with setup excluded. The key risk is that the reported speedups depend on optimized CPU implementation and model/chunk scale, so a small Python reproduction may show a smaller or noisier margin.",
+      "model": "gpt-5.5",
+      "cost_usd": 0.11328,
+      "fulltext_source": "pdf",
+      "fulltext_chars": 57370
+    },
+    {
+      "pass": 2,
+      "arxiv_id": "2610.10199",
+      "title": "Robust Decentralized Fairness Auditing",
+      "testability": 4,
+      "difficulty": "medium",
+      "est_gpu_hours": 2.0,
+      "est_usd": 2.0,
+      "claim": "At reduced scale, Auditopus should beat no-defense GAS aggregation on adversarial decentralized demographic-parity auditing by at least 0.05 lower absolute DP estimation error.",
+      "dataset": "Civil Comments, freely downloadable: yes",
+      "reason": "The core method is a simulation over per-query group labels and binary model outputs, so it can be tested without training and with a small cached or lightweight classifier run. The algorithms for the attacker, suspicion score, and weighting are specified clearly, and the no-defense baseline is simple. The key risk is that the effect size depends on heterogeneous partitioning, attack strength, and using realistic LLM predictions; at very small scale or with substitute labels, the margin may be noisier.",
+      "model": "gpt-5.5",
+      "cost_usd": 0.12466,
+      "fulltext_source": "html",
+      "fulltext_chars": 80000
+    },
+    {
+      "pass": 2,
+      "arxiv_id": "2610.09877",
+      "title": "Layerwise Error Attribution for Fast and Robust Mixed-Precision Post-Training Quantization",
+      "testability": 3,
+      "difficulty": "medium",
+      "est_gpu_hours": 2.0,
+      "est_usd": 2.0,
+      "claim": "At reduced scale, layerwise error attribution mixed-precision PTQ should beat uniform 4-bit PTQ on DRUNet image denoising by at least 1.0 dB PSNR.",
+      "dataset": "CelebA, freely downloadable: yes",
+      "reason": "The core algorithm is fairly simple\u2014inference-only score collection from full-precision activations followed by a greedy bit allocation\u2014and a uniform 4-bit baseline is easy to implement. However, reproducing the paper\u2019s stronger claims against CLADO/AIMET/OMPQ is not practical in a small automated loop, and results depend on correctly implementing DRUNet block grouping and per-channel weight quantization. The key risk is that the large reported advantage may shrink or become implementation-sensitive at very small calibration/test scale.",
+      "model": "gpt-5.5",
+      "cost_usd": 0.14325,
+      "fulltext_source": "pdf",
+      "fulltext_chars": 80000
+    }
+  ]
+}
