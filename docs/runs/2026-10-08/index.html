@@ -11,6 +11,7 @@ pre{background:#f6f6f6;padding:.8rem;overflow:auto;white-space:pre-wrap}
 <h2>Story</h2>
 <h1>NeuralZip Setup Scaled to BF16 Compression</h1>
 <p>Run <code>2026-10-08</code> of paper2code on <a href="https://arxiv.org/abs/2610.09916">NeuralZip: Reusable Setup for Fast Lossless Compression</a> (2610.09916). Outcome: <code>completed_suspicious</code>.</p>
+<p>*Prose by the writer model; every number, table, timeline row and code line below is printed by the manager from the record.*</p>
 <h2>Context</h2>
 <p>NeuralZip studies lossless compression for model weights by preparing reusable statistical structures before later compression calls. Its main quantitative claim is that post-setup compression is 1.81–21.33× faster than baselines while preserving exact bit-to-bit reconstruction, with reported GPU memory reductions up to 27.5%.</p>
 <p>The scout selected the paper with score 4 because the core mechanism could be reduced to a small experiment: BF16 exponent extraction, chunk clustering, shared Huffman code lengths, and packed adjacent exponents. Huffman coding is a prefix-code compression method that assigns shorter codes to more frequent symbols, which made the paper’s setup-versus-recompute claim directly testable without downloading real checkpoints.</p>
@@ -28,7 +29,7 @@ pre{background:#f6f6f6;padding:.8rem;overflow:auto;white-space:pre-wrap}
 <ul><li>14:48:05 session_start</li><li>14:48:06 sandbox created</li><li>14:49:26 write_file neuralzip_small.py</li><li>14:49:33 bash python -c &quot; import neuralzip_small as m for s in [0,1,2]: r=m.run_scaled_experim</li><li>14:50:09 bash python - &lt;&lt;&#x27;EOF&#x27; s=open(&#x27;neuralzip_small.py&#x27;).read() old_parse=s[s.index(&#x27;def _g</li><li>14:50:12 sandbox checkpoint</li><li>14:50:25 run_tests #1: 7 passed, 0 failed</li><li>14:50:26 sandbox exported</li><li>14:50:26 sandbox terminated</li><li>14:50:26 session_end (all_public_passed)</li></ul>
 <h2>The code</h2>
 <p>This range shows the setup phase. It extracts exponent chunks, clusters them with Jensen-Shannon distance, counts adjacent pairs, selects packed symbols, parses chunks into mixed singleton and packed tokens, and builds cluster Huffman lengths. It also contains the flagged construction at lines 223–224, where the table is built from observed singleton tokens and packed symbols plus an escape symbol rather than from all 256 singleton exponents.</p>
-<p><code>neuralzip_small.py</code>, lines 167 to 226:</p>
+<p><code>neuralzip_small.py</code>, lines 167 to 226 (cut at 60 lines):</p>
 <pre><code>    def fit(self, model: Dict[str, torch.Tensor]) -&gt; &quot;NeuralZipSetup&quot;:
         t0 = time.perf_counter()
         chunk_list = []  # (key, idx, exps)
@@ -186,7 +187,7 @@ pre{background:#f6f6f6;padding:.8rem;overflow:auto;white-space:pre-wrap}
 <p>Flags:</p>
 <ul><li><code>wrong_method</code> (inspector) at neuralzip_small.py:223: The setup does not build the cluster Huffman table over all 256 singleton exponents as specified. It uses only observed singleton tokens plus packed symbols: <code>counts = {s: int(c) for s, c in enumerate(tok_counts.tolist()) if c &gt; 0 or s &gt;= NUM_EXP}</code>, followed by an added escape symbol on line 224 (`c</li></ul>
 <h2>Cost</h2>
-<table><tr><th>Item</th><th>Value</th></tr><tr><td>Outcome</td><td><code>completed_suspicious</code></td></tr><tr><td>Test runs</td><td>1 of 25</td></tr><tr><td>OpenAI spend</td><td>1.84 USD</td></tr><tr><td>GPU seconds</td><td>12.9</td></tr><tr><td>Tokens (builder)</td><td>476307</td></tr><tr><td>Wall time</td><td>9 min</td></tr><tr><td>Scout score</td><td>4</td></tr></table>
+<table><tr><th>Item</th><th>Value</th></tr><tr><td>Outcome</td><td><code>completed_suspicious</code></td></tr><tr><td>Test runs</td><td>1 of 25</td></tr><tr><td>OpenAI spend (all model calls)</td><td>2.04 USD</td></tr><tr><td>GPU seconds</td><td>12.9</td></tr><tr><td>Tokens (all model calls)</td><td>508188</td></tr><tr><td>Wall time</td><td>9 min</td></tr><tr><td>Scout score</td><td>4</td></tr></table>
 <h2>Assessment</h2>
 <p>At this scale, the run supports the paper’s central engineering idea in a limited form: a frozen setup can reduce deterministic post-setup compression work while maintaining exact BF16 reconstruction on the tested synthetic distributions. The public and hidden tests exercised drift, altered sizes, altered chunking, and altered setup hyperparameters, and all recorded tests passed.</p>
 <p>The agent produced a compact, functional implementation and used only one official test run. It cut one methodological corner in the setup alphabet: instead of including all singleton exponents in every reusable table, it encoded only observed singleton symbols and relied on an escape symbol for others. That choice preserved robustness for the tests but made the implementation suspicious as a reproduction of the specified NeuralZip-style setup.</p>
